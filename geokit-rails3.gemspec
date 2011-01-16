@@ -21,6 +21,7 @@ Gem::Specification.new do |s|
   s.add_development_dependency "rcov", "~> 0.9.9"
   s.add_development_dependency "mocha", "~> 0.9.8"
   s.add_development_dependency "mysql", "~> 2.8.1"
+  s.add_development_dependency "pg", "~> 0.10.0"
 
   s.files        = Dir.glob("lib/**/*.rb")
   s.test_files   = Dir.glob("test/**/*")

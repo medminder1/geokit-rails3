@@ -29,15 +29,23 @@ class ActsAsMappableTest < GeokitTestCase
     @address = mock_addresses(:address_barnes_and_noble)
   end
   
-  def count_in_subquery(scope, table_alias="#{scope.table.name}_results")
-    ActiveRecord::Base.connection.select_value("SELECT COUNT(*) FROM (#{scope.to_sql}) AS #{table_alias}").to_i
+  # We have to use a subquery here because Postgres doesn't support referring to aliases in HAVING clauses
+  def scope_having(scope, conditions, table_alias="wrapped_#{scope.table.name}")
+    scope.klass.select("*").from(Arel.sql('(' + scope.to_sql + ") AS #{table_alias}")).having(conditions)
+  end
+  
+  def count_scope(scope, table_alias="#{scope.table.name}_results")
+    if scope.having_values.any?
+      ActiveRecord::Base.connection.select_value("SELECT COUNT(*) FROM (#{scope.to_sql}) AS #{table_alias}").to_i
+    else
+      ActiveRecord::Base.connection.select_value(scope.except(:select).select('COUNT(*)').to_sql).to_i
+    end
   end
 
   def test_override_default_units_the_hard_way
     Location.default_units = :kms
-    locations = Location.geo_scope(:origin => @loc_a).having("distance < 3.97")
-    assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    locations = scope_having(Location.geo_scope(:origin => @loc_a), "distance < 3.97")
+    assert_equal 5, count_scope(locations)
     Location.default_units = :miles
   end
 
@@ -79,86 +87,86 @@ class ActsAsMappableTest < GeokitTestCase
   def test_find_with_distance_condition
     locations = Location.geo_scope(:origin => @loc_a, :within => 3.97)
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_find_with_distance_condition_with_units_override
     locations = Location.geo_scope(:origin => @loc_a, :units => :kms, :within => 6.387)
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_find_with_distance_condition_with_formula_override
     locations = Location.geo_scope(:origin => @loc_a, :formula => :flat, :within => 6.387)
     assert_equal 6, locations.all.size
-    assert_equal 6, count_in_subquery(locations)
+    assert_equal 6, count_scope(locations)
   end
 
   def test_find_within
     locations = Location.within(3.97, :origin => @loc_a)
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_find_within_with_coordinates
     locations = Location.within(3.97, :origin =>[@loc_a.lat,@loc_a.lng])
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_find_with_compound_condition
-    locations = Location.geo_scope(:origin => @loc_a).having("distance < 5 and city = 'Coppell'")
+    locations = scope_having(Location.geo_scope(:origin => @loc_a), "distance < 5 and city = 'Coppell'")
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_find_with_secure_compound_condition
-    locations = Location.geo_scope(:origin => @loc_a).having(["distance < ? and city = ?", 5, 'Coppell'])
+    locations = scope_having(Location.geo_scope(:origin => @loc_a), ["distance < ? and city = ?", 5, 'Coppell'])
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_find_beyond
     locations = Location.beyond(3.95, :origin => @loc_a)
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_find_beyond_with_token
     # locations = Location.find(:all, :beyond => 3.95, :origin => @loc_a)
     locations = Location.geo_scope(:beyond => 3.95, :origin => @loc_a)
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_find_beyond_with_coordinates
     locations = Location.beyond(3.95, :origin =>[@loc_a.lat, @loc_a.lng])
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_find_range_with_token
     locations = Location.geo_scope(:range => 0..10, :origin => @loc_a)
     assert_equal 6, locations.all.size
-    assert_equal 6, count_in_subquery(locations)
+    assert_equal 6, count_scope(locations)
   end
 
   def test_find_range_with_token_with_conditions
     locations = Location.geo_scope(:origin => @loc_a, :range => 0..10).where(["city = ?", 'Coppell'])
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_find_range_with_token_with_hash_conditions
     locations = Location.geo_scope(:origin => @loc_a, :range => 0..10).where(:city => 'Coppell')
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_find_range_with_token_excluding_end
     locations = Location.geo_scope(:range => 0...10, :origin => @loc_a)
     assert_equal 6, locations.all.size
-    assert_equal 6, count_in_subquery(locations)
+    assert_equal 6, count_scope(locations)
   end
 
   def test_find_nearest
@@ -185,27 +193,27 @@ class ActsAsMappableTest < GeokitTestCase
   end
 
   def test_scoped_find_with_distance_condition
-    locations = @starbucks.locations.geo_scope(:origin => @loc_a).having("distance < 3.97")
+    locations = scope_having(@starbucks.locations.geo_scope(:origin => @loc_a), "distance < 3.97")
     assert_equal 4, locations.all.size
-    assert_equal 4, count_in_subquery(locations)
+    assert_equal 4, count_scope(locations)
   end
 
   def test_scoped_find_within
     locations = @starbucks.locations.within(3.97, :origin => @loc_a)
     assert_equal 4, locations.all.size
-    assert_equal 4, count_in_subquery(locations)
+    assert_equal 4, count_scope(locations)
   end
 
   def test_scoped_find_with_compound_condition
-    locations = @starbucks.locations.geo_scope(:origin => @loc_a).having("distance < 5 and city = 'Coppell'")
+    locations = scope_having(@starbucks.locations.geo_scope(:origin => @loc_a), "distance < 5 and city = 'Coppell'")
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_scoped_find_beyond
     locations = @starbucks.locations.beyond(3.95, :origin => @loc_a)
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_scoped_find_nearest
@@ -226,37 +234,37 @@ class ActsAsMappableTest < GeokitTestCase
 
   def test_ip_geocoded_find_with_distance_condition
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
-    locations = Location.geo_scope(:origin => LOCATION_A_IP).having("distance < 3.97")
+    locations = scope_having(Location.geo_scope(:origin => LOCATION_A_IP), "distance < 3.97")
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_ip_geocoded_find_within
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
     locations = Location.within(3.97, :origin => LOCATION_A_IP)
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_ip_geocoded_find_with_compound_condition
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
-    locations = Location.geo_scope(:origin => LOCATION_A_IP).having("distance < 5 and city = 'Coppell'")
+    locations = scope_having(Location.geo_scope(:origin => LOCATION_A_IP), "distance < 5 and city = 'Coppell'")
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_ip_geocoded_find_with_secure_compound_condition
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
-    locations = Location.geo_scope(:origin => LOCATION_A_IP).having(["distance < ? and city = ?", 5, 'Coppell'])
+    locations = scope_having(Location.geo_scope(:origin => LOCATION_A_IP), ["distance < ? and city = ?", 5, 'Coppell'])
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_ip_geocoded_find_beyond
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
     locations = Location.beyond(3.95, :origin => LOCATION_A_IP)
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_ip_geocoded_find_nearest
@@ -278,59 +286,59 @@ class ActsAsMappableTest < GeokitTestCase
 
   def test_address_geocode
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with('Irving, TX').returns(@location_a)
-    locations = Location.geo_scope(:origin => 'Irving, TX').having(["distance < ? and city = ?", 5, 'Coppell'])
+    locations = scope_having(Location.geo_scope(:origin => 'Irving, TX'), ["distance < ? and city = ?", 5, 'Coppell'])
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_find_with_custom_distance_condition
-    locations = CustomLocation.geo_scope(:origin => @loc_a).having("dist < 3.97")
+    locations = scope_having(CustomLocation.geo_scope(:origin => @loc_a), "dist < 3.97")
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   # TODO: This test is failing b/c #count hasn't been ported over yet
   #def test_find_with_custom_distance_condition_using_custom_origin
-  #  locations = CustomLocation.geo_scope(:origin => @custom_loc_a).having("dist < 3.97")
+  #  locations = scope_having(CustomLocation.geo_scope(:origin => @custom_loc_a), "dist < 3.97")
   #  assert_equal 5, locations.all.size
-  #  locations = CustomLocation.count(:origin => @custom_loc_a).having("dist < 3.97")
-  #  assert_equal 5, count_in_subquery(locations)
+  #  locations = scope_having(CustomLocation.count(:origin => @custom_loc_a), "dist < 3.97")
+  #  assert_equal 5, count_scope(locations)
   #end
 
   def test_find_within_with_custom
     locations = CustomLocation.within(3.97, :origin => @loc_a)
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_find_within_with_coordinates_with_custom
     locations = CustomLocation.within(3.97, :origin =>[@loc_a.lat, @loc_a.lng])
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
   def test_find_with_compound_condition_with_custom
-    locations = CustomLocation.geo_scope(:origin => @loc_a).having("dist < 5 and city = 'Coppell'")
+    locations = scope_having(CustomLocation.geo_scope(:origin => @loc_a), "dist < 5 and city = 'Coppell'")
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_find_with_secure_compound_condition_with_custom
-    locations = CustomLocation.geo_scope(:origin => @loc_a).having(["dist < ? and city = ?", 5, 'Coppell'])
+    locations = scope_having(CustomLocation.geo_scope(:origin => @loc_a), ["dist < ? and city = ?", 5, 'Coppell'])
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_find_beyond_with_custom
     locations = CustomLocation.beyond(3.95, :origin => @loc_a)
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_find_beyond_with_coordinates_with_custom
     locations = CustomLocation.beyond(3.95, :origin =>[@loc_a.lat, @loc_a.lng])
     assert_equal 1, locations.all.size
-    assert_equal 1, count_in_subquery(locations)
+    assert_equal 1, count_scope(locations)
   end
 
   def test_find_nearest_with_custom
@@ -350,9 +358,9 @@ class ActsAsMappableTest < GeokitTestCase
   end
 
   def test_find_with_array_origin
-    locations = Location.geo_scope(:origin =>[@loc_a.lat,@loc_a.lng]).having("distance < 3.97")
+    locations = scope_having(Location.geo_scope(:origin => [@loc_a.lat,@loc_a.lng]), "distance < 3.97")
     assert_equal 5, locations.all.size
-    assert_equal 5, count_in_subquery(locations)
+    assert_equal 5, count_scope(locations)
   end
 
 
@@ -361,7 +369,7 @@ class ActsAsMappableTest < GeokitTestCase
   def test_find_within_bounds
     locations = Location.in_bounds([@sw,@ne])
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_find_within_bounds_ordered_by_distance
@@ -373,7 +381,7 @@ class ActsAsMappableTest < GeokitTestCase
   def test_find_within_bounds_with_token
     locations = Location.geo_scope(:bounds=>[@sw,@ne])
     assert_equal 2, locations.all.size
-    assert_equal 2, count_in_subquery(locations)
+    assert_equal 2, count_scope(locations)
   end
 
   def test_find_within_bounds_with_string_conditions
@@ -413,7 +421,7 @@ class ActsAsMappableTest < GeokitTestCase
   def test_find_with_through
     organizations = MockOrganization.geo_scope(:origin => @location_a).order('distance ASC')
     assert_equal 2, organizations.all.size
-    organizations = MockOrganization.geo_scope(:origin => @location_a).having("distance < 3.97")
+    organizations = scope_having(MockOrganization.geo_scope(:origin => @location_a), "distance < 3.97")
     assert_equal 1, organizations.count
   end
 
