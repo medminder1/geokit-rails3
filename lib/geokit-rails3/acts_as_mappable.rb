@@ -3,13 +3,13 @@ require 'active_support/concern'
 
 module Geokit
   module ActsAsMappable
-
+    
     class UnsupportedAdapter < StandardError ; end
 
     # Add the +acts_as_mappable+ method into ActiveRecord subclasses
     module Glue # :nodoc:
       extend ActiveSupport::Concern
-
+      
       module ClassMethods # :nodoc:
         def acts_as_mappable(options = {})
           metaclass = (class << self; self; end)
@@ -52,7 +52,64 @@ module Geokit
         end
       end
     end # Glue
-
+    
+    # Adapted from http://onestepback.org/index.cgi/Tech/Ruby/BlankSlate.rdoc
+    #class BlankSlate
+    #  alias_method :proxy_class, :class
+    #  alias_method :proxy_respond_to?, :respond_to?
+    #  
+    #  instance_methods.each { |m| undef_method m unless m =~ /^(?:__|proxy_)/ }
+    #end
+    
+    class Relation < ActiveRecord::Relation
+      #attr_reader :klass, :scope
+      attr_accessor :distance_formula
+      #
+      #def initialize(klass, scope)
+      #  @klass = klass
+      #  @scope = scope
+      #end
+      #
+      #def initialize_copy(other)
+      #  super
+      #  @scope = other.scope.clone
+      #end
+      
+      def where(opts, *rest)
+        relation = clone
+        unless opts.blank?
+          where_values = build_where(opts, rest)
+          relation.where_values += substitute_distance_in_values(where_values)
+        end
+        relation
+      end
+      
+      def order(*args)
+        relation = clone
+        unless args.blank?
+          order_values = args.flatten
+          relation.order_values += substitute_distance_in_values(order_values)
+        end
+        relation
+      end
+      
+      #def method_missing(name, *args, &block)
+      #  if @scope.respond_to?(name)
+      #    @scope.__send__(name, *args, &block)
+      #  else
+      #    super
+      #  end
+      #end
+      
+    private
+      def substitute_distance_in_values(values)
+        return values unless @distance_formula
+        # substitute distance with the actual distance equation
+        pattern = Regexp.new("\\b#{@klass.distance_column_name}\\b")
+        values.map {|value| value.is_a?(String) ? value.gsub(pattern, @distance_formula) : value }
+      end
+    end
+    
     extend ActiveSupport::Concern
 
     included do
@@ -61,7 +118,6 @@ module Geokit
 
     # Class methods included in models when +acts_as_mappable+ is called
     module ClassMethods
-
       # A proxy to an instance of a finder adapter, inferred from the connection's adapter.
       def adapter
         @adapter ||= begin
@@ -106,25 +162,28 @@ module Geokit
       end
 
       def geo_scope(options = {})
-        arel = self.is_a?(ActiveRecord::Relation) ? self : self.scoped
-
-        origin  = extract_origin_from_options(options)
-        units   = extract_units_from_options(options)
-        formula = extract_formula_from_options(options)
-        bounds  = extract_bounds_from_options(options)
+        arel = self.is_a?(Relation) ? self : self.scoped
+        #klass = self.is_a?(Relation) ? self.klass : self
+        
+        #arel = ArelProxy.new(klass, arel)
+        
+        origin = extract_origin_from_options!(options)
+        units = extract_units_from_options!(options)
+        formula = extract_formula_from_options!(options)
+        bounds = extract_bounds_from_options!(options)
 
         if origin || bounds
-          bounds = formulate_bounds_from_distance(options, origin, units) unless bounds
+          bounds ||= formulate_bounds_from_distance(options, origin, units)
 
           if origin
-            @distance_formula = distance_sql(origin, units, formula)
+            arel.distance_formula = distance_formula = distance_sql(origin, units, formula)
             
             if arel.select_values.blank?
               star_select = Arel::SqlLiteral.new(arel.quoted_table_name + '.*')
               arel = arel.select(star_select)
             end
             
-            distance_select = Arel::SqlLiteral.new("#{@distance_formula} AS #{distance_column_name}")
+            distance_select = Arel::SqlLiteral.new("#{distance_formula} AS #{distance_column_name}")
             arel = arel.select(distance_select)
           end
 
@@ -135,34 +194,28 @@ module Geokit
 
           distance_conditions = distance_conditions(options)
           arel = arel.where(distance_conditions) if distance_conditions
-
-          if origin
-            arel = substitute_distance_in_where_values(arel, origin, units, formula)
+          
+          if self.through
+            arel = arel.includes(self.through)
           end
         end
 
         arel
       end
-
-      # Returns the distance calculation to be used as a display column or a condition.  This
-      # is provide for anyone wanting access to the raw SQL.
-      def distance_sql(origin, units=default_units, formula=default_formula)
-        case formula
-        when :sphere
-          sql = sphere_distance_sql(origin, units)
-        when :flat
-          sql = flat_distance_sql(origin, units)
-        end
-        sql
+      
+    private
+      # Override ActiveRecord::Base.relation to return an instance of Geokit::ActsAsMappable::Relation.
+      # TODO: Do we need to override JoinDependency#relation too?
+      def relation
+        @relation ||= Relation.new(self, arel_table)
+        finder_needs_type_condition? ? @relation.where(type_condition) : @relation
       end
-
-      private
-
+    
       # If it's a :within query, add a bounding box to improve performance.
       # This only gets called if a :bounds argument is not otherwise supplied.
       def formulate_bounds_from_distance(options, origin, units)
         distance = options[:within] if options.has_key?(:within)
-        distance = options[:range].last-(options[:range].exclude_end?? 1 : 0) if options.has_key?(:range)
+        distance = options[:range].last-(options[:range].exclude_end? ? 1 : 0) if options.has_key?(:range)
         if distance
           res=Geokit::Bounds.from_point_and_radius(origin,distance,:units=>units)
         else
@@ -192,33 +245,30 @@ module Geokit
       # it.  If there is no origin, looks for latitude and longitude values to
       # create an origin.  The side-effect of the method is to remove these
       # option keys from the hash.
-      def extract_origin_from_options(options)
-        origin = options.delete(:origin)
-        res = normalize_point_to_lat_lng(origin) if origin
-        res
+      def extract_origin_from_options!(options)
+        if origin = options.delete(:origin)
+          normalize_point_to_lat_lng(origin)
+        end
       end
 
       # Extract the units out of the options if it exists and returns it.  If
       # there is no :units key, it uses the default.  The side effect of the
       # method is to remove the :units key from the options hash.
-      def extract_units_from_options(options)
-        units = options[:units] || default_units
-        options.delete(:units)
-        units
+      def extract_units_from_options!(options)
+        options.delete(:units) || default_units
       end
 
       # Extract the formula out of the options if it exists and returns it.  If
       # there is no :formula key, it uses the default.  The side effect of the
       # method is to remove the :formula key from the options hash.
-      def extract_formula_from_options(options)
-        formula = options[:formula] || default_formula
-        options.delete(:formula)
-        formula
+      def extract_formula_from_options!(options)
+        options.delete(:formula) || default_formula
       end
 
-      def extract_bounds_from_options(options)
-        bounds = options.delete(:bounds)
-        bounds = Geokit::Bounds.normalize(bounds) if bounds
+      def extract_bounds_from_options!(options)
+        if bounds = options.delete(:bounds)
+          Geokit::Bounds.normalize(bounds)
+        end
       end
 
       # Geocode IP address.
@@ -237,24 +287,19 @@ module Geokit
         res = Geokit::LatLng.normalize(point) unless res
         res
       end
-
-      # Looks for the distance column and replaces it with the distance sql. If an origin was not
-      # passed in and the distance column exists, we leave it to be flagged as bad SQL by the database.
-      # Conditions are either a string or an array.  In the case of an array, the first entry contains
-      # the condition.
-      def substitute_distance_in_where_values(arel, origin, units=default_units, formula=default_formula)
-        pattern = Regexp.new("\\b#{distance_column_name}\\b")
-        value   = distance_sql(origin, units, formula)
-        arel.where_values.map! do |where_value|
-          if where_value.is_a?(String)
-            where_value.gsub(pattern, value)
-          else
-            where_value
-          end
+      
+      # Returns the distance calculation to be used as a display column or a condition.  This
+      # is provide for anyone wanting access to the raw SQL.
+      def distance_sql(origin, units=default_units, formula=default_formula)
+        case formula
+        when :sphere
+          sql = sphere_distance_sql(origin, units)
+        when :flat
+          sql = flat_distance_sql(origin, units)
         end
-        arel
+        sql
       end
-
+      
       # Returns the distance SQL using the spherical world formula (Haversine).  The SQL is tuned
       # to the database in use.
       def sphere_distance_sql(origin, units)
@@ -273,9 +318,8 @@ module Geokit
 
         adapter.flat_distance_sql(origin, lat_degree_units, lng_degree_units)
       end
-
     end # ClassMethods
-
+    
     # this is the callback for auto_geocoding
     def auto_geocode_address
       address=self.send(auto_geocode_field).to_s
@@ -290,7 +334,7 @@ module Geokit
 
       geo.success
     end
-
+    
     def self.end_of_reflection_chain(through, klass)
       while through
         reflection = nil
