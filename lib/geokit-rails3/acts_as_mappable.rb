@@ -53,27 +53,8 @@ module Geokit
       end
     end # Glue
     
-    # Adapted from http://onestepback.org/index.cgi/Tech/Ruby/BlankSlate.rdoc
-    #class BlankSlate
-    #  alias_method :proxy_class, :class
-    #  alias_method :proxy_respond_to?, :respond_to?
-    #  
-    #  instance_methods.each { |m| undef_method m unless m =~ /^(?:__|proxy_)/ }
-    #end
-    
     class Relation < ActiveRecord::Relation
-      #attr_reader :klass, :scope
       attr_accessor :distance_formula
-      #
-      #def initialize(klass, scope)
-      #  @klass = klass
-      #  @scope = scope
-      #end
-      #
-      #def initialize_copy(other)
-      #  super
-      #  @scope = other.scope.clone
-      #end
       
       def where(opts, *rest)
         relation = clone
@@ -92,14 +73,6 @@ module Geokit
         end
         relation
       end
-      
-      #def method_missing(name, *args, &block)
-      #  if @scope.respond_to?(name)
-      #    @scope.__send__(name, *args, &block)
-      #  else
-      #    super
-      #  end
-      #end
       
     private
       def substitute_distance_in_values(values)
@@ -163,9 +136,6 @@ module Geokit
 
       def geo_scope(options = {})
         arel = self.is_a?(Relation) ? self : self.scoped
-        #klass = self.is_a?(Relation) ? self.klass : self
-        
-        #arel = ArelProxy.new(klass, arel)
         
         origin = extract_origin_from_options!(options)
         units = extract_units_from_options!(options)
