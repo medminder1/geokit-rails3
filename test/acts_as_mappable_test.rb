@@ -30,8 +30,8 @@ class ActsAsMappableTest < GeokitTestCase
   end
   
   # We have to use a subquery here because Postgres doesn't support referring to aliases in HAVING clauses
-  def scope_having(scope, conditions, table_alias="wrapped_#{scope.table.name}")
-    scope.klass.select("*").from(Arel.sql('(' + scope.to_sql + ") AS #{table_alias}")).having(conditions)
+  def wrap_scope_in_where(scope, conditions, table_alias="wrapped_#{scope.table.name}")
+    scope.klass.select("*").from(Arel.sql('(' + scope.to_sql + ") AS #{table_alias}")).where(conditions)
   end
   
   def count_scope(scope, table_alias="#{scope.table.name}_results")
@@ -44,7 +44,7 @@ class ActsAsMappableTest < GeokitTestCase
 
   def test_override_default_units_the_hard_way
     Location.default_units = :kms
-    locations = scope_having(Location.geo_scope(:origin => @loc_a), "distance < 3.97")
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => @loc_a), "distance < 3.97")
     assert_equal 5, count_scope(locations)
     Location.default_units = :miles
   end
@@ -115,13 +115,13 @@ class ActsAsMappableTest < GeokitTestCase
   end
 
   def test_find_with_compound_condition
-    locations = scope_having(Location.geo_scope(:origin => @loc_a), "distance < 5 and city = 'Coppell'")
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => @loc_a), "distance < 5 and city = 'Coppell'")
     assert_equal 2, locations.all.size
     assert_equal 2, count_scope(locations)
   end
 
   def test_find_with_secure_compound_condition
-    locations = scope_having(Location.geo_scope(:origin => @loc_a), ["distance < ? and city = ?", 5, 'Coppell'])
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => @loc_a), ["distance < ? and city = ?", 5, 'Coppell'])
     assert_equal 2, locations.all.size
     assert_equal 2, count_scope(locations)
   end
@@ -193,7 +193,7 @@ class ActsAsMappableTest < GeokitTestCase
   end
 
   def test_scoped_find_with_distance_condition
-    locations = scope_having(@starbucks.locations.geo_scope(:origin => @loc_a), "distance < 3.97")
+    locations = wrap_scope_in_where(@starbucks.locations.geo_scope(:origin => @loc_a), "distance < 3.97")
     assert_equal 4, locations.all.size
     assert_equal 4, count_scope(locations)
   end
@@ -205,7 +205,7 @@ class ActsAsMappableTest < GeokitTestCase
   end
 
   def test_scoped_find_with_compound_condition
-    locations = scope_having(@starbucks.locations.geo_scope(:origin => @loc_a), "distance < 5 and city = 'Coppell'")
+    locations = wrap_scope_in_where(@starbucks.locations.geo_scope(:origin => @loc_a), "distance < 5 and city = 'Coppell'")
     assert_equal 2, locations.all.size
     assert_equal 2, count_scope(locations)
   end
@@ -234,7 +234,7 @@ class ActsAsMappableTest < GeokitTestCase
 
   def test_ip_geocoded_find_with_distance_condition
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
-    locations = scope_having(Location.geo_scope(:origin => LOCATION_A_IP), "distance < 3.97")
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => LOCATION_A_IP), "distance < 3.97")
     assert_equal 5, locations.all.size
     assert_equal 5, count_scope(locations)
   end
@@ -248,14 +248,14 @@ class ActsAsMappableTest < GeokitTestCase
 
   def test_ip_geocoded_find_with_compound_condition
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
-    locations = scope_having(Location.geo_scope(:origin => LOCATION_A_IP), "distance < 5 and city = 'Coppell'")
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => LOCATION_A_IP), "distance < 5 and city = 'Coppell'")
     assert_equal 2, locations.all.size
     assert_equal 2, count_scope(locations)
   end
 
   def test_ip_geocoded_find_with_secure_compound_condition
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with(LOCATION_A_IP).returns(@location_a)
-    locations = scope_having(Location.geo_scope(:origin => LOCATION_A_IP), ["distance < ? and city = ?", 5, 'Coppell'])
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => LOCATION_A_IP), ["distance < ? and city = ?", 5, 'Coppell'])
     assert_equal 2, locations.all.size
     assert_equal 2, count_scope(locations)
   end
@@ -286,22 +286,22 @@ class ActsAsMappableTest < GeokitTestCase
 
   def test_address_geocode
     GeoKit::Geocoders::MultiGeocoder.expects(:geocode).with('Irving, TX').returns(@location_a)
-    locations = scope_having(Location.geo_scope(:origin => 'Irving, TX'), ["distance < ? and city = ?", 5, 'Coppell'])
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => 'Irving, TX'), ["distance < ? and city = ?", 5, 'Coppell'])
     assert_equal 2, locations.all.size
     assert_equal 2, count_scope(locations)
   end
 
   def test_find_with_custom_distance_condition
-    locations = scope_having(CustomLocation.geo_scope(:origin => @loc_a), "dist < 3.97")
+    locations = wrap_scope_in_where(CustomLocation.geo_scope(:origin => @loc_a), "dist < 3.97")
     assert_equal 5, locations.all.size
     assert_equal 5, count_scope(locations)
   end
 
   # TODO: This test is failing b/c #count hasn't been ported over yet
   #def test_find_with_custom_distance_condition_using_custom_origin
-  #  locations = scope_having(CustomLocation.geo_scope(:origin => @custom_loc_a), "dist < 3.97")
+  #  locations = wrap_scope_in_where(CustomLocation.geo_scope(:origin => @custom_loc_a), "dist < 3.97")
   #  assert_equal 5, locations.all.size
-  #  locations = scope_having(CustomLocation.count(:origin => @custom_loc_a), "dist < 3.97")
+  #  locations = wrap_scope_in_where(CustomLocation.count(:origin => @custom_loc_a), "dist < 3.97")
   #  assert_equal 5, count_scope(locations)
   #end
 
@@ -318,13 +318,13 @@ class ActsAsMappableTest < GeokitTestCase
   end
 
   def test_find_with_compound_condition_with_custom
-    locations = scope_having(CustomLocation.geo_scope(:origin => @loc_a), "dist < 5 and city = 'Coppell'")
+    locations = wrap_scope_in_where(CustomLocation.geo_scope(:origin => @loc_a), "dist < 5 and city = 'Coppell'")
     assert_equal 1, locations.all.size
     assert_equal 1, count_scope(locations)
   end
 
   def test_find_with_secure_compound_condition_with_custom
-    locations = scope_having(CustomLocation.geo_scope(:origin => @loc_a), ["dist < ? and city = ?", 5, 'Coppell'])
+    locations = wrap_scope_in_where(CustomLocation.geo_scope(:origin => @loc_a), ["dist < ? and city = ?", 5, 'Coppell'])
     assert_equal 1, locations.all.size
     assert_equal 1, count_scope(locations)
   end
@@ -358,7 +358,7 @@ class ActsAsMappableTest < GeokitTestCase
   end
 
   def test_find_with_array_origin
-    locations = scope_having(Location.geo_scope(:origin => [@loc_a.lat,@loc_a.lng]), "distance < 3.97")
+    locations = wrap_scope_in_where(Location.geo_scope(:origin => [@loc_a.lat,@loc_a.lng]), "distance < 3.97")
     assert_equal 5, locations.all.size
     assert_equal 5, count_scope(locations)
   end
@@ -421,7 +421,7 @@ class ActsAsMappableTest < GeokitTestCase
   def test_find_with_through
     organizations = MockOrganization.geo_scope(:origin => @location_a).order('distance ASC')
     assert_equal 2, organizations.all.size
-    organizations = scope_having(MockOrganization.geo_scope(:origin => @location_a), "distance < 3.97")
+    organizations = wrap_scope_in_where(MockOrganization.geo_scope(:origin => @location_a), "distance < 3.97")
     assert_equal 1, organizations.count
   end
 
