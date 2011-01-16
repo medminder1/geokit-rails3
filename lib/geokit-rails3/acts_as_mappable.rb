@@ -83,10 +83,49 @@ module Geokit
       end
     end
     
+    class << self
+      def end_of_reflection_chain(through, klass)
+        while through
+          reflection = nil
+          if through.is_a?(Hash)
+            association, through = through.to_a.first
+          else
+            association, through = through, nil
+          end
+
+          if reflection = klass.reflect_on_association(association)
+            klass = reflection.klass
+          else
+            raise ArgumentError, "You gave #{association} in :through, but I could not find it on #{klass}."
+          end
+        end
+
+        reflection
+      end
+    end
+    
     extend ActiveSupport::Concern
 
     included do
       include Geokit::Mappable
+    end
+    
+    # Instance methods included in models when +acts_as_mappable+ is called
+    module InstanceMethods
+      # this is the callback for auto_geocoding
+      def auto_geocode_address
+        address=self.send(auto_geocode_field).to_s
+        geo=Geokit::Geocoders::MultiGeocoder.geocode(address)
+
+        if geo.success
+          self.send("#{lat_column_name}=", geo.lat)
+          self.send("#{lng_column_name}=", geo.lng)
+        else
+          errors.add(auto_geocode_field, auto_geocode_error_message)
+        end
+
+        geo.success
+      end
     end
 
     # Class methods included in models when +acts_as_mappable+ is called
@@ -289,44 +328,6 @@ module Geokit
         adapter.flat_distance_sql(origin, lat_degree_units, lng_degree_units)
       end
     end # ClassMethods
-    
-    # this is the callback for auto_geocoding
-    def auto_geocode_address
-      address=self.send(auto_geocode_field).to_s
-      geo=Geokit::Geocoders::MultiGeocoder.geocode(address)
-
-      if geo.success
-        self.send("#{lat_column_name}=", geo.lat)
-        self.send("#{lng_column_name}=", geo.lng)
-      else
-        errors.add(auto_geocode_field, auto_geocode_error_message)
-      end
-
-      geo.success
-    end
-    
-    def self.end_of_reflection_chain(through, klass)
-      while through
-        reflection = nil
-        if through.is_a?(Hash)
-          association, through = through.to_a.first
-        else
-          association, through = through, nil
-        end
-
-        if reflection = klass.reflect_on_association(association)
-          klass = reflection.klass
-        else
-          raise ArgumentError, "You gave #{association} in :through, but I could not find it on #{klass}."
-        end
-      end
-
-      reflection
-    end
 
   end # ActsAsMappable
 end # Geokit
-
-
-
-# ActiveRecord::Base.extend Geokit::ActsAsMappable
